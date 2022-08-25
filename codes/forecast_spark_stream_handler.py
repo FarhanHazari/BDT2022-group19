@@ -1,6 +1,5 @@
 # To run:
-# spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.0.3,org.mongodb.spark:mongo-spark-connector_2.12:3.0.1 /opt/apps/forecast_spark_stream_handler.py
-
+# spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.0.3,org.mongodb.spark:mongo-spark-connector_2.12:3.0.1 C:\Users\farha\Downloads\Big Data\BDT_FINAL\forecast_spark_stream_handler.py
 
 from pymongo import MongoClient as Client
 import json
@@ -12,6 +11,10 @@ from functools import reduce
 import pandas as pd
 import pprint
 import json
+import os
+import sys
+os.environ['PYSPARK_PYTHON'] = sys.executable
+os.environ['PYSPARK_DRIVER_PYTHON'] = sys.executable
 
 KAFKA_TOPIC = "fcz61y67-weather_data"
 FORECAST_TOPIC = "fcz61y67-weather_forecast"
@@ -44,7 +47,8 @@ class WeatherClassifier():
         class_data = list(self.data[self.class_attr])
         for i in class_values:
             self.priori[i] = class_data.count(i)/float(len(class_data))
-        print("Priori Values: ", self.priori)
+        print("Result: ", self.priori)
+        return self.priori
 
     '''
         Here we calculate the individual probabilites 
@@ -74,17 +78,16 @@ class WeatherClassifier():
             for j in hypothesis:
                 self.cp[i].update(
                     {hypothesis[j]: self.get_cp(j, hypothesis[j], i)})
-        print("\nCalculated Conditional Probabilities: \n")
-        pprint.pprint(self.cp)
+        # print("\nCalculated Conditional Probabilities: \n")
+        # pprint.pprint(self.cp)
 
     def classify(self):
         forecast = []
-        print("Result: ")
+        # print("Result: ")
         for i in self.cp:
-            print(i, " ==> ", reduce(lambda x, y: x*y,
-                  self.cp[i].values())*self.priori[i])
-            forecast.append(i, " ==> ", reduce(
-                lambda x, y: x*y, self.cp[i].values())*self.priori[i])
+            # print(i, " ==> ", reduce(lambda x, y: x*y,
+            #       self.cp[i].values())*self.priori[i])
+            forecast.append(reduce(lambda x, y: x*y, self.cp[i].values())*self.priori[i])
         return forecast
 
 
@@ -104,12 +107,13 @@ spark.sparkContext.setLogLevel("WARN")
 # define the schema
 # save as json
 schema = StructType([
-    StructField("outlook", StringType(), True),  # outlook field as string
-    StructField("temp", StringType(), True),  # temp field as string
-    StructField("humidity", StringType(), True),  # humidity field as string
-    StructField("windy", StringType(), True),  # windy field as string
-    StructField("forecast", StringType(), True),  # forecast field as string
-    StructField("date", TimestampType(), True)  # date field as TimestampType
+    StructField("weather", StringType(), True),  # outlook field as string
+    StructField("main", StringType(), True),  # temp field as string
+    StructField("wind", StringType(), True),  # humidity field as string
+    StructField("clouds", StringType(), True),  # windy field as string
+    StructField("coord", StringType(), True),  # forecast field as string
+    StructField("dt", StringType(), True),  # date field as TimestampType
+    StructField("name", StringType(), True)  # date field as string
 ])
 
 # define the spark dataframe
@@ -127,6 +131,7 @@ df = (spark
       .option("failOnDataLoss", "false")
       .load().select(from_json(col("value").cast("string"), schema).alias("value")).select("value.*"))
 
+df.printSchema()
 
 # define a function that write the kafka streams to mongodb
 def write_to_mongo(df, b):
@@ -155,24 +160,38 @@ producer = Producer(**conf)
 def get_forecast(df, b):
     c = WeatherClassifier(filename="dataset.csv", class_attr="Play")
 
+    #print(df)
+
     batch = df.collect()  # read the batch
     # for each message in the batch
     for i in range(len(batch)):
         # "forecasts" collection in "BDT_rain_forecast" database
-        outlook = batch[i]['outlook']
-        temp = batch[i]['temp']
-        humidity = batch[i]['humidity']
+        #print("Printing batch: ")
+        #print(batch[i])
+        
+        # weather, main, wind, clouds, coord, dt, name
+        outlook = batch[i]['weather']
+        outlook = json.loads(outlook)[0]['main']
+        
+        temp = batch[i]['main']
+        temp = json.loads(temp)['temp']
+        
+        humidity = batch[i]['main']
+        humidity = json.loads(humidity)['humidity']
+        
         windy = batch[i]['wind']
-        date = batch[i]['date']
+        windy = json.loads(windy)['speed']
+        
+        date = batch[i]['dt']
 
         c.hypothesis = {"Outlook": outlook, "Temp": temp,
                   "Humidity": humidity, "Windy": windy}
-        c.calculate_priori()
+        forep = c.calculate_priori()
         c.calculate_conditional_probabilities(c.hypothesis)
 
         # define message
-        forecast = c.classify()
-        msg = {'outlook': outlook, 'temp': temp, 'humidity': humidity, 'windy': windy, 'forecast': forecast, 'date': date}
+        c.classify()
+        msg = {'outlook': outlook, 'temp': temp, 'humidity': humidity, 'windy': windy, 'forecast': forep, 'date': date}
 
         # send message to "fcz61y67-weather_forecast" topic
         producer.produce(FORECAST_TOPIC, json.dumps(msg).encode('utf-8'))
@@ -183,7 +202,6 @@ def get_forecast(df, b):
 # write the kafka streams to mongodb and send weather forecast
 query = df\
     .writeStream \
-    .foreachBatch(write_to_mongo)\
     .foreachBatch(get_forecast)\
     .start()
 
