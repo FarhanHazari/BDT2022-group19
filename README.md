@@ -4,7 +4,7 @@
 
 **Big Data Technologies Project 2022 - Group 19**
 
-The project aims to implement a big data system that provides real-time rain prediction for any location in the world on an hourly basis over the following 5 days. A pipeline has been defined, starting from the data collection,  passing through real-time data ingestion and ending with a working demo that, using the map of Trento, plots real-time fake accidents taking into account their severity.
+The project aims to implement a big data system that provides real-time rain prediction for any location in the world on an hourly basis over the following 5 days.
 
 
 #
